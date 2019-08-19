@@ -48,13 +48,38 @@ pam_sm_close_session (pam_handle_t *pamh UNUSED, int flags UNUSED,
 
 static char default_motd[] = DEFAULT_MOTD;
 
+static void display_file(pam_handle_t *pamh, const char *motd_path)
+{
+    int fd;
+    char *mtmp = NULL;
+    while ((fd = open(motd_path, O_RDONLY, 0)) >= 0) {
+	struct stat st;
+	/* fill in message buffer with contents of motd */
+	if ((fstat(fd, &st) < 0) || !st.st_size || st.st_size > 0x10000)
+	    break;
+	if (!(mtmp = malloc(st.st_size+1)))
+	    break;
+	if (pam_modutil_read(fd, mtmp, st.st_size) != st.st_size)
+	    break;
+	if (mtmp[st.st_size-1] == '\n')
+	    mtmp[st.st_size-1] = '\0';
+	else
+	    mtmp[st.st_size] = '\0';
+	pam_info (pamh, "%s", mtmp);
+	break;
+    }
+    _pam_drop (mtmp);
+    if (fd >= 0)
+	close(fd);
+}
+
 int pam_sm_open_session(pam_handle_t *pamh, int flags,
 			int argc, const char **argv)
 {
     int retval = PAM_IGNORE;
-    int fd;
+    int do_update = 1;
     const char *motd_path = NULL;
-    char *mtmp = NULL;
+    struct stat st;
 
     if (flags & PAM_SILENT) {
 	return retval;
@@ -72,6 +97,9 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags,
 			   "motd= specification missing argument - ignored");
 	    }
 	}
+	else if (!strcmp(*argv,"noupdate")) {
+		do_update = 0;
+	}
 	else
 	    pam_syslog(pamh, LOG_ERR, "unknown option: %s", *argv);
     }
@@ -79,34 +107,23 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags,
     if (motd_path == NULL)
 	motd_path = default_motd;
 
-    while ((fd = open(motd_path, O_RDONLY, 0)) >= 0) {
-	struct stat st;
-
-	/* fill in message buffer with contents of motd */
-	if ((fstat(fd, &st) < 0) || !st.st_size || st.st_size > 0x10000)
-	    break;
-
-	if (!(mtmp = malloc(st.st_size+1)))
-	    break;
-
-	if (pam_modutil_read(fd, mtmp, st.st_size) != st.st_size)
-	    break;
-
-	if (mtmp[st.st_size-1] == '\n')
-	    mtmp[st.st_size-1] = '\0';
-	else
-	    mtmp[st.st_size] = '\0';
-
-	pam_info (pamh, "%s", mtmp);
-	break;
+    /* Run the update-motd dynamic motd scripts, outputting to /run/motd.dynamic.
+       This will be displayed only when calling pam_motd with
+       motd=/run/motd.dynamic; current /etc/pam.d/login and /etc/pam.d/sshd
+       display both this file and /etc/motd. */
+    if (do_update && (stat("/etc/update-motd.d", &st) == 0)
+        && S_ISDIR(st.st_mode))
+    {
+	mode_t old_mask = umask(0022);
+	if (!system("/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin run-parts --lsbsysinit /etc/update-motd.d > /run/motd.dynamic.new"))
+	    rename("/run/motd.dynamic.new", "/run/motd.dynamic");
+	umask(old_mask);
     }
 
-    _pam_drop (mtmp);
+    /* Display the updated motd */
+    display_file(pamh, motd_path);
 
-    if (fd >= 0)
-	close(fd);
-
-     return retval;
+    return retval;
 }
 
 /* end of module definition */
