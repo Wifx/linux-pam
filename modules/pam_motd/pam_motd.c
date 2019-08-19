@@ -73,6 +73,61 @@ static void display_file(pam_handle_t *pamh, const char *motd_path)
 	close(fd);
 }
 
+int display_legal(pam_handle_t *pamh)
+{
+    int retval = PAM_IGNORE, rc;
+    char *user = NULL;
+    char *dir = NULL;
+    char *flag = NULL;
+    struct passwd *pwd = NULL;
+    struct stat s;
+    int f;
+    /* Get the user name to determine if we need to print the disclaimer */
+    rc = pam_get_item(pamh, PAM_USER, &user);
+    if (rc == PAM_SUCCESS && user != NULL && *(const char *)user != '\0')
+    {
+        PAM_MODUTIL_DEF_PRIVS(privs);
+
+        /* Get the password entry */
+        pwd = pam_modutil_getpwnam (pamh, user);
+        if (pwd != NULL)
+        {
+            if (pam_modutil_drop_priv(pamh, &privs, pwd)) {
+                pam_syslog(pamh, LOG_ERR,
+                           "Unable to change UID to %d temporarily\n",
+                           pwd->pw_uid);
+                retval = PAM_SESSION_ERR;
+                goto finished;
+            }
+
+            if (asprintf(&dir, "%s/.cache", pwd->pw_dir) == -1 || !dir)
+                goto finished;
+            if (asprintf(&flag, "%s/motd.legal-displayed", dir) == -1 || !flag)
+                goto finished;
+
+            if (stat(flag, &s) != 0)
+            {
+                display_file(pamh, "/etc/legal");
+                mkdir(dir, 0700);
+                f = open(flag, O_WRONLY|O_CREAT|O_EXCL,
+                         S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+                if (f>=0) close(f);
+            }
+
+finished:
+            if (pam_modutil_regain_priv(pamh, &privs)) {
+                pam_syslog(pamh, LOG_ERR,
+                           "Unable to change UID back to %d\n", privs.old_uid);
+                retval = PAM_SESSION_ERR;
+            }
+
+            _pam_drop(flag);
+            _pam_drop(dir);
+        }
+    }
+    return retval;
+}
+
 int pam_sm_open_session(pam_handle_t *pamh, int flags,
 			int argc, const char **argv)
 {
@@ -122,6 +177,9 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags,
 
     /* Display the updated motd */
     display_file(pamh, motd_path);
+
+    /* Display the legal disclaimer only if necessary */
+    retval = display_legal(pamh);
 
     return retval;
 }
