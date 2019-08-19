@@ -170,7 +170,7 @@ int pam_sm_open_session(pam_handle_t *pamh, int flags,
         && S_ISDIR(st.st_mode))
     {
 	mode_t old_mask = umask(0022);
-	if (!system("/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin run-parts --lsbsysinit /etc/update-motd.d > /run/motd.dynamic.new"))
+	if (!system("/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin run-parts /etc/update-motd.d > /run/motd.dynamic.new"))
 	    rename("/run/motd.dynamic.new", "/run/motd.dynamic");
 	umask(old_mask);
     }
